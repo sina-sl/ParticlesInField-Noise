@@ -16,7 +16,6 @@ ext {
   junitVersion = '5.8.1'
 }
 
-
 tasks.withType(JavaCompile) {
   options.encoding = 'UTF-8'
 }
@@ -28,7 +27,12 @@ application {
 
 javafx {
   version = '17.0.1'
-  modules = ['javafx.controls', 'javafx.fxml', 'javafx.web','javafx.controls', 'javafx.graphics', 'javafx.swing', 'javafx.base']
+  modules = ['javafx.controls', 'javafx.fxml', 'javafx.web', 'javafx.graphics']
+}
+
+java{
+  sourceCompatibility = JavaVersion.VERSION_17
+  targetCompatibility = JavaVersion.VERSION_17
 }
 
 dependencies {
@@ -50,7 +54,8 @@ dependencies {
 }
 
 test {
-  useJUnitPlatform()  }
+  useJUnitPlatform()
+}
 
 jlink {
   imageZip = project.file("${buildDir}/distributions/app-${javafx.platform.classifier}.zip")
