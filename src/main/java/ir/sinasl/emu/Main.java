@@ -1,14 +1,22 @@
 package ir.sinasl.emu;
 
 import javafx.animation.AnimationTimer;
+import javafx.animation.PauseTransition;
 import javafx.application.Application;
-import javafx.scene.Group;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
+import javafx.geometry.Rectangle2D;
 import javafx.scene.Scene;
 import javafx.scene.SnapshotParameters;
-import javafx.scene.canvas.Canvas;
+import javafx.scene.image.PixelFormat;
 import javafx.scene.image.WritableImage;
-import javafx.scene.input.KeyCode;
+import javafx.scene.input.KeyEvent;
+import javafx.scene.layout.Pane;
+import javafx.scene.layout.StackPane;
+import javafx.scene.paint.Color;
+import javafx.stage.Screen;
 import javafx.stage.Stage;
+import javafx.util.Duration;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -16,79 +24,121 @@ import java.io.File;
 import java.io.IOException;
 
 
-public class Main extends Application {
+public class Main extends Application implements ControlPanel.Actions {
 
-    public static final double W = 1366; // canvas dimensions.
-    public static final double H = 768;
-
-    public static final double freq = 30;
-
+    private final Settings settings = new Settings();
+    private final Pane canvasPane = new Pane();
+    private Scene scene;
+    private Stage stage;
+    private Drawer drawer;
+    private boolean paused;
 
     @Override
     public void start(Stage stage) {
-        Drawer drawer = new Drawer();
-        Canvas canvas = new Canvas(W, H);
+        this.stage = stage;
+        // size the canvas to the screen resolution
+        Rectangle2D bounds = Screen.getPrimary().getBounds();
 
-        drawer.start(canvas.getGraphicsContext2D());
+        ControlPanel panel = new ControlPanel(settings, this);
+        StackPane.setAlignment(panel, Pos.TOP_LEFT);
+        StackPane.setMargin(panel, new Insets(12));
+
+        StackPane root = new StackPane(canvasPane, panel);
+        scene = new Scene(root, bounds.getWidth(), bounds.getHeight(), Color.BLACK);
+
+        drawer = new Drawer(canvasPane, bounds.getWidth(), bounds.getHeight(), settings);
+
+        // rebuild the drawer once the window stops resizing, or when a setting that
+        // needs a rebuild stops changing
+        PauseTransition restartDebounce = new PauseTransition(Duration.millis(300));
+        restartDebounce.setOnFinished(e -> restart());
+        scene.widthProperty().addListener((obs, o, n) -> restartDebounce.playFromStart());
+        scene.heightProperty().addListener((obs, o, n) -> restartDebounce.playFromStart());
+        settings.pixelsPerParticle.addListener((obs, o, n) -> restartDebounce.playFromStart());
+        settings.cellSize.addListener((obs, o, n) -> restartDebounce.playFromStart());
 
         AnimationTimer timer = new AnimationTimer() {
             @Override
             public void handle(long now) {
-                drawer.draw(canvas.getGraphicsContext2D(), now);
+                if (!paused) {
+                    drawer.draw();
+                }
             }
         };
 
-//    Timeline timeline = new Timeline(
-//      new KeyFrame(
-//        Duration.seconds(1/freq),
-//        e -> drawer.draw(canvas.getGraphicsContext2D(), 0)
-//      )
-//    );
-
-        Scene scene = new Scene(new Group(canvas));
-        scene.setOnKeyPressed(event -> {
-            if (event.getCode().equals(KeyCode.ENTER)) {
-
-                WritableImage writableImage = new WritableImage(canvas.widthProperty().intValue(), canvas.heightProperty().intValue());
-                canvas.snapshot(new SnapshotParameters(), writableImage);
-
-                BufferedImage img = new BufferedImage(canvas.widthProperty().intValue(), canvas.heightProperty().intValue(), BufferedImage.TYPE_INT_ARGB);
-
-
-                for (int i = 0; i < canvas.heightProperty().intValue(); i++) {
-                    for (int j = 0; j < canvas.widthProperty().intValue(); j++) {
-
-                        img.setRGB(j, i, writableImage.getPixelReader().getArgb(j, i));
-
-                    }
-                }
-
-
-                try {
-                    File export = new File(String.valueOf(System.currentTimeMillis()) + ".png");
-                    export.createNewFile();
-                    ImageIO.write(img, "png", export);
-                    System.out.println("exported at: " + export.toPath());
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-
-
+        // a filter so shortcuts work even while a control in the panel has focus
+        scene.addEventFilter(KeyEvent.KEY_PRESSED, event -> {
+            boolean handled = true;
+            switch (event.getCode()) {
+                case H -> panel.setVisible(!panel.isVisible());
+                case SPACE -> togglePause();
+                case N -> reseed();
+                case T -> settings.newTones();
+                case C -> clearTrails();
+                case R -> restart();
+                case D -> settings.reset();
+                case ENTER -> export();
+                case F11 -> stage.setFullScreen(!stage.isFullScreen());
+                default -> handled = false;
+            }
+            if (handled) {
+                event.consume();
             }
         });
 
+        stage.setTitle("Particles In Field");
         stage.setScene(scene);
+        stage.setMaximized(true);
         stage.show();
 
-
         timer.start();
-//    timeline.setCycleCount(Timeline.INDEFINITE);
-//    timeline.play();
     }
 
-    public static void main(String[] args) throws IOException, InterruptedException {
+    @Override
+    public void togglePause() {
+        paused = !paused;
+    }
+
+    @Override
+    public void reseed() {
+        drawer.reseedNow();
+    }
+
+    @Override
+    public void clearTrails() {
+        drawer.clearTrails();
+    }
+
+    @Override
+    public void restart() {
+        if (scene.getWidth() > 0 && scene.getHeight() > 0) {
+            drawer = new Drawer(canvasPane, scene.getWidth(), scene.getHeight(), settings);
+        }
+    }
+
+    @Override
+    public void export() {
+        SnapshotParameters params = new SnapshotParameters();
+        params.setFill(Color.BLACK);
+        WritableImage image = canvasPane.snapshot(params, null);
+
+        int w = (int) image.getWidth(), h = (int) image.getHeight();
+        int[] pixels = new int[w * h];
+        image.getPixelReader().getPixels(0, 0, w, h, PixelFormat.getIntArgbInstance(), pixels, 0, w);
+        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        img.setRGB(0, 0, w, h, pixels, 0, w);
+
+        try {
+            File export = new File(System.currentTimeMillis() + ".png");
+            ImageIO.write(img, "png", export);
+            System.out.println("exported at: " + export.toPath());
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static void main(String[] args) {
         launch();
     }
-
 
 }
